@@ -37,6 +37,13 @@
 #' @param varname.size    size of the text for variable names
 #' @param varname.adjust  adjustment factor the placement of the variable names, >= 1 means farther from the arrow
 #' @param varname.abbrev  whether or not to abbreviate the variable names
+#' @param line.to.center  boolean indicating whether line should be drawn from center of a group to the individual points
+#' @param show.h.baseline boolean indicating whether a horizontal line should be drawn at 0 
+#' @param show.v.baseline boolean indicating whether a vertical line should be drawn at 0 
+#' @param scale.name      string indicating the name of the legend
+#' @param simple.axis.labels boolean indicating whether the more complex axis labels should be dumbed down to "Principal Component 1" and "Principal Component 2"
+#' @param annotate.ellipse   boolean indicating whether each ellipse should have the group name written above it.
+#' @param annotation.size numeric indicating the size of the font for annotate.ellipse
 #'
 #' @return                a ggplot2 plot
 #' @export
@@ -45,24 +52,44 @@
 #'   wine.pca <- prcomp(wine, scale. = TRUE)
 #'   print(ggbiplot(wine.pca, obs.scale = 1, var.scale = 1, groups = wine.class, ellipse = TRUE, circle = TRUE))
 #'
-ggbiplot <- function(pcobj, choices = 1:2, scale = 1, pc.biplot = TRUE, 
-                      obs.scale = 1 - scale, var.scale = scale, 
-                      groups = NULL, ellipse = FALSE, ellipse.prob = 0.68, 
-                      labels = NULL, labels.size = 3, alpha = 1, 
-                      var.axes = TRUE, 
-                      circle = FALSE, circle.prob = 0.69, 
-                      varname.size = 3, varname.adjust = 1.5, 
-                      varname.abbrev = FALSE, ...)
+ggbiplot <- function(
+  pcobj, 
+    choices = 1:2, 
+    scale = 1, 
+    pc.biplot = TRUE, 
+    obs.scale = 1 - scale, 
+    var.scale = scale, 
+    groups = NULL, 
+    ellipse = FALSE, 
+    ellipse.prob = 0.68, 
+    labels = NULL, 
+    labels.size = 3, 
+    alpha = 1, 
+    var.axes = TRUE, 
+    circle = FALSE, 
+    circle.prob = 0.69, 
+    varname.size = 3, 
+    varname.adjust = 1.5, 
+    varname.abbrev = FALSE, 
+    line.to.center = TRUE, 
+    show.h.baseline = TRUE,
+    show.v.baseline = TRUE,
+    scale.name = '',
+    simple.axis.labels = TRUE,
+    annotate.ellipse = TRUE,
+    annotation.size = 3,
+    ...
+  )
 {
   library(ggplot2)
   library(plyr)
   library(scales)
   library(grid)
-
+  
   stopifnot(length(choices) == 2)
-
+  
   # Recover the SVD
- if(inherits(pcobj, 'prcomp')){
+  if(inherits(pcobj, 'prcomp')){
     nobs.factor <- sqrt(nrow(pcobj$x) - 1)
     d <- pcobj$sdev
     u <- sweep(pcobj$x, 2, 1 / (d * nobs.factor), FUN = '*')
@@ -78,75 +105,88 @@ ggbiplot <- function(pcobj, choices = 1:2, scale = 1, pc.biplot = TRUE,
     u <- sweep(pcobj$ind$coord, 2, 1 / (d * nobs.factor), FUN = '*')
     v <- sweep(pcobj$var$coord,2,sqrt(pcobj$eig[1:ncol(pcobj$var$coord),1]),FUN="/")
   } else if(inherits(pcobj, "lda")) {
-      nobs.factor <- sqrt(pcobj$N)
-      d <- pcobj$svd
-      u <- predict(pcobj)$x/nobs.factor
-      v <- pcobj$scaling
-      d.total <- sum(d^2)
+    nobs.factor <- sqrt(pcobj$N)
+    d <- pcobj$svd
+    u <- predict(pcobj)$x/nobs.factor
+    v <- pcobj$scaling
+    d.total <- sum(d^2)
   } else {
     stop('Expected a object of class prcomp, princomp, PCA, or lda')
   }
-
+  
   # Scores
   choices <- pmin(choices, ncol(u))
   df.u <- as.data.frame(sweep(u[,choices], 2, d[choices]^obs.scale, FUN='*'))
-
+  
   # Directions
   v <- sweep(v, 2, d^var.scale, FUN='*')
   df.v <- as.data.frame(v[, choices])
-
+  
   names(df.u) <- c('xvar', 'yvar')
   names(df.v) <- names(df.u)
-
+  
   if(pc.biplot) {
     df.u <- df.u * nobs.factor
   }
-
+  
   # Scale the radius of the correlation circle so that it corresponds to 
   # a data ellipse for the standardized PC scores
   r <- sqrt(qchisq(circle.prob, df = 2)) * prod(colMeans(df.u^2))^(1/4)
-
+  
   # Scale directions
   v.scale <- rowSums(v^2)
   df.v <- r * df.v / sqrt(max(v.scale))
-
+  
   # Change the labels for the axes
   if(obs.scale == 0) {
     u.axis.labs <- paste('standardized PC', choices, sep='')
   } else {
     u.axis.labs <- paste('PC', choices, sep='')
   }
-
+  
   # Append the proportion of explained variance to the axis labels
   u.axis.labs <- paste(u.axis.labs, 
                        sprintf('(%0.1f%% explained var.)', 
                                100 * pcobj$sdev[choices]^2/sum(pcobj$sdev^2)))
-
+  
   # Score Labels
   if(!is.null(labels)) {
     df.u$labels <- labels
   }
-
+  
   # Grouping variable
   if(!is.null(groups)) {
     df.u$groups <- groups
   }
-
+  
   # Variable Names
   if(varname.abbrev) {
     df.v$varname <- abbreviate(rownames(v))
   } else {
     df.v$varname <- rownames(v)
   }
-
+  
   # Variables for text label placement
   df.v$angle <- with(df.v, (180/pi) * atan(yvar / xvar))
   df.v$hjust = with(df.v, (1 - varname.adjust * sign(xvar)) / 2)
-
+  
   # Base plot
+  if(simple.axis.labels){
+    u.axis.labs[1] =  "Principal Component 1"
+    u.axis.labs[2] =  "Principal Component 2"
+  }
+  
   g <- ggplot(data = df.u, aes(x = xvar, y = yvar)) + 
-          xlab(u.axis.labs[1]) + ylab(u.axis.labs[2]) + coord_equal()
-
+    xlab(u.axis.labs[1]) + ylab(u.axis.labs[2])# + coord_equal()
+  
+  if(show.h.baseline){
+    g <- g + geom_hline(yintercept = 0)
+  }
+  
+  if(show.v.baseline){
+    g <- g + geom_vline(xintercept = 0)
+  }
+  
   if(var.axes) {
     # Draw circle
     if(circle) 
@@ -156,7 +196,7 @@ ggbiplot <- function(pcobj, choices = 1:2, scale = 1, pc.biplot = TRUE,
       g <- g + geom_path(data = circle, color = muted('white'), 
                          size = 1/2, alpha = 1/3)
     }
-
+    
     # Draw directions
     g <- g +
       geom_segment(data = df.v,
@@ -164,7 +204,7 @@ ggbiplot <- function(pcobj, choices = 1:2, scale = 1, pc.biplot = TRUE,
                    arrow = arrow(length = unit(1/2, 'picas')), 
                    color = muted('red'))
   }
-
+  
   # Draw either labels or points
   if(!is.null(df.u$labels)) {
     if(!is.null(df.u$groups)) {
@@ -180,12 +220,12 @@ ggbiplot <- function(pcobj, choices = 1:2, scale = 1, pc.biplot = TRUE,
       g <- g + geom_point(alpha = alpha)      
     }
   }
-
+  
   # Overlay a concentration ellipse if there are groups
   if(!is.null(df.u$groups) && ellipse) {
     theta <- c(seq(-pi, pi, length = 50), seq(pi, -pi, length = 50))
     circle <- cbind(cos(theta), sin(theta))
-
+    
     ell <- ddply(df.u, 'groups', function(x) {
       if(nrow(x) <= 2) {
         return(NULL)
@@ -197,24 +237,62 @@ ggbiplot <- function(pcobj, choices = 1:2, scale = 1, pc.biplot = TRUE,
                  groups = x$groups[1])
     })
     names(ell)[1:2] <- c('xvar', 'yvar')
-    g <- g + geom_path(data = ell, aes(color = groups, group = groups))
+    find_hull <- function(df) df[chull(df$xvar, df$yvar), ]
+    hulls <- ddply(ell, .(groups), find_hull)
+    
+    g <- g + geom_polygon(data = hulls, aes(color = groups, group = groups, fill = groups), alpha = 0.1)
+    g <- g + scale_color_discrete(name = scale.name)
+    g <- g + scale_fill_discrete(name = scale.name)
+    
+    if(annotate.ellipse){
+      x_centers = tapply(df.u$xvar, df.u$groups, mean)
+      y_max = tapply(hulls$yvar, hulls$groups, max)
+      gg_color_hue <- function(n) {
+        hues = seq(15, 375, length = n + 1)
+        hcl(h = hues, l = 65, c = 100)[1:n]
+      }
+      g <- g + annotate("text", x=x_centers, y=y_max, label= names(x_centers), vjust = -1, color = gg_color_hue(length(x_centers)), fontface = 2, size = annotation.size)
+    }
+  }
+  
+  
+  # draw line from center of group to points
+  if(line.to.center){
+    # make ids for each stop point
+    center.line.df = df.u
+    center.line.df$point_id = paste0("p", seq( 1, nrow(center.line.df)))
+    center.line.df$end = "stop"
+    x_centers = tapply(center.line.df$xvar, center.line.df$groups, mean)
+    y_centers = tapply(center.line.df$yvar, center.line.df$groups, mean)
+    for (stop_index in 1:nrow(center.line.df)) {
+      start_index = nrow(center.line.df) + 1
+      my_group = center.line.df[stop_index,"groups"]
+      center.line.df[start_index,"end"] = "start"  # define the end, amybe not needed but helps to see for now
+      center.line.df[start_index,"groups"] = my_group
+      center.line.df[start_index,"point_id"] = center.line.df[stop_index,"point_id"]
+      center.line.df[start_index,"xvar"] = x_centers[my_group]
+      center.line.df[start_index,"yvar"] = y_centers[my_group]
+    }
+    center.line.df$point_id = factor(center.line.df$point_id)
+    g <- g + geom_line(data=center.line.df, aes( x= xvar, y = yvar, color = groups, group = point_id), show.legend = FALSE)
   }
 
+  
   # Label the variable axes
   if(var.axes) {
     g <- g + 
-    geom_text(data = df.v, 
-              aes(label = varname, x = xvar, y = yvar, 
-                  angle = angle, hjust = hjust), 
-              color = 'darkred', size = varname.size)
+      geom_text(data = df.v, 
+                aes(label = varname, x = xvar, y = yvar, 
+                    angle = angle, hjust = hjust), 
+                color = 'darkred', size = varname.size)
   }
   # Change the name of the legend for groups
   # if(!is.null(groups)) {
   #   g <- g + scale_color_brewer(name = deparse(substitute(groups)), 
   #                               palette = 'Dark2')
   # }
-
+  
   # TODO: Add a second set of axes
-
+  
   return(g)
 }
